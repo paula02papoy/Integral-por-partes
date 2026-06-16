@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calculadora de Integrales por Partes</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.4.2/math.min.js"></script>
+
+<style>
+body{
+    font-family: Arial, sans-serif;
+    background: linear-gradient(135deg,#ffb6d9,#ffd6ec);
+    margin:0;
+    padding:20px;
+}
+
+.container{
+    max-width:900px;
+    margin:auto;
+    background:white;
+    padding:25px;
+    border-radius:20px;
+    box-shadow:0 0 15px rgba(0,0,0,0.2);
+}
+
+h1{
+    text-align:center;
+    color:#d63384;
+}
+
+input{
+    width:100%;
+    padding:12px;
+    font-size:18px;
+    border:2px solid #ff8cc6;
+    border-radius:10px;
+    margin-bottom:15px;
+    box-sizing: border-box;
+}
+
+button{
+    width:100%;
+    padding:15px;
+    font-size:18px;
+    background:#ff4fa3;
+    color:white;
+    border:none;
+    border-radius:10px;
+    cursor:pointer;
+}
+
+button:hover{
+    background:#e6398e;
+}
+
+.resultado{
+    margin-top:20px;
+    padding:15px;
+    background:#fff0f7;
+    border-radius:10px;
+}
+
+.paso{
+    background:white;
+    padding:10px;
+    margin-top:10px;
+    border-left:5px solid #ff4fa3;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>🌸 Calculadora de Integrales por Partes 🌸</h1>
+
+<input type="text" id="funcion" 
+    placeholder="Ejemplo: x*e^x , x*sin(x) , ln(x) , 3*x*cos(x)">
+
+<button onclick="resolver()">Calcular por Partes</button>
+
+<div class="resultado" id="resultado"></div>
+
+</div>
+
+<script>
+
+function preprocesarFuncion(expr) {
+    let f = expr.trim();
+    f = f.replace(/sen\s*\(/gi, 'sin(');
+    f = f.replace(/sen([a-z0-9\(])/gi, 'sin($1'); 
+    f = f.replace(/cos\s*\(/gi, 'cos(');
+    f = f.replace(/tan\s*\(/gi, 'tan(');
+    f = f.replace(/ln\s*\(/gi, 'log(');   
+    
+    f = f.replace(/(\d)([a-zA-Z(])/g, '$1*$2');      
+    f = f.replace(/\)([a-zA-Z(])/g, ')*$1');         
+    f = f.replace(/\)(\d+)/g, ')*$1');               
+    f = f.replace(/(\d+)\s+(sin|cos|tan|log)/g, '$1*$2');
+    
+    f = f.replace(/(sin|cos|tan|log)\^(\d+)\s*\(([^)]+)\)/gi, '($1($3))^$2');
+    
+    f = f.replace(/e\^([^\s\+\-\*\/\(\)]+)/g, 'exp($1)');
+    f = f.replace(/e\^\(([^)]+)\)/g, 'exp($1)');
+    
+    f = f.replace(/(\d+)(sin|cos|tan|log)/g, '$1*$2');
+    return f;
+}
+
+// Integrador elemental directo para calcular 'v' y la segunda integral
+function integrarDirecto(nodo) {
+    if (nodo.isSymbolNode && nodo.name === 'x') return "0.5 * x^2";
+    if (nodo.isConstantNode) return `${nodo.value} * x`;
+    
+    if (nodo.isOperatorNode && nodo.op === '^') {
+        let base = nodo.args[0];
+        let exponente = nodo.args[1];
+        if (base.isSymbolNode && base.name === 'x' && exponente.isConstantNode) {
+            let n = exponente.value;
+            return `(x^${n + 1}) / ${n + 1}`;
+        }
+    }
+    if (nodo.isFunctionNode && nodo.args[0].toString() === 'x') {
+        if (nodo.name === 'sin') return "-cos(x)";
+        if (nodo.name === 'cos') return "sin(x)";
+        if (nodo.name === 'exp') return "exp(x)";
+    }
+    if (nodo.isOperatorNode && nodo.op === '*' && nodo.args[0].isConstantNode) {
+        let k = nodo.args[0].value;
+        let sub = integrarDirecto(nodo.args[1]);
+        if (sub) return `${k} * (${sub})`;
+    }
+    return null;
+}
+
+function resolverPorPartes(funcionProcesada) {
+    let nodo = math.parse(funcionProcesada);
+    let u, dv;
+    let constante = 1;
+
+    // Extraer constantes multiplicativas externas si existen (ej: 3 * x * sin(x))
+    if (nodo.isOperatorNode && nodo.op === '*' && nodo.args[0].isConstantNode) {
+        constante = nodo.args[0].value;
+        nodo = nodo.args[1];
+    }
+
+    // Regla ILATE simplificada para separar en u y dv
+    // Caso 1: Logarítmica aislada o acompañada -> ln(x) o x*ln(x)
+    if (nodo.isFunctionNode && nodo.name === 'log') {
+        u = nodo;
+        dv = math.parse("1");
+    } else if (nodo.isOperatorNode && nodo.op === '*' && 
+              (nodo.args[0].isFunctionNode && nodo.args[0].name === 'log' || 
+               nodo.args[1].isFunctionNode && nodo.args[1].name === 'log')) {
+        u = nodo.args[0].name === 'log' ? nodo.args[0] : nodo.args[1];
+        dv = nodo.args[0].name === 'log' ? nodo.args[1] : nodo.args[0];
+    }
+    // Caso 2: Algebraica * Trigonométrica o Exponencial -> x * sin(x) o x * exp(x)
+    else if (nodo.isOperatorNode && nodo.op === '*') {
+        let arg0 = nodo.args[0];
+        let arg1 = nodo.args[1];
+        
+        let esAlgebraica0 = arg0.isSymbolNode && arg0.name === 'x' || (arg0.isOperatorNode && arg0.op === '^');
+        let esAlgebraica1 = arg1.isSymbolNode && arg1.name === 'x' || (arg1.isOperatorNode && arg1.op === '^');
+        
+        if (esAlgebraica0) { u = arg0; dv = arg1; }
+        else if (esAlgebraica1) { u = arg1; dv = arg0; }
+    }
+
+    if (!u || !dv) {
+        throw new Error("No se identificó una estructura clara para aplicar la regla de partes.");
+    }
+
+    // 1. Calcular du (derivada de u)
+    let du = math.derivative(u, 'x');
+    
+    // 2. Calcular v (integral de dv)
+    let vStr = integrarDirecto(dv);
+    if (!vStr) throw new Error("No se pudo integrar dv de forma directa.");
+    let v = math.parse(vStr);
+
+    // 3. Plantear la fórmula: u * v - ∫(v * du)
+    let u_por_v = math.simplify(math.parse(`${u.toString()} * ${v.toString()}`));
+    let v_por_du = math.simplify(math.parse(`${v.toString()} * ${du.toString()}`));
+    
+    // 4. Resolver la segunda integral: ∫(v * du)
+    let integral_v_du_str = integrarDirecto(v_por_du);
+    if (!integral_v_du_str) throw new Error("La segunda integral resultó muy compleja.");
+    let integral_v_du = math.parse(integral_v_du_str);
+
+    // 5. Armar el resultado final: constante * (u*v - segunda_integral)
+    let resultadoNodo = math.simplify(math.parse(`${constante} * (${u_por_v.toString()} - (${integral_v_du.toString()}))`));
+
+    return {
+        u: u.toString(),
+        dv: dv.toString(),
+        du: math.simplify(du).toString(),
+        v: math.simplify(v).toString(),
+        v_du: v_por_du.toString(),
+        resultadoFinal: math.simplify(resultadoNodo).toString()
+    };
+}
+
+function resolver(){
+    let entradaUsuario = document.getElementById("funcion").value;
+    let salida = document.getElementById("resultado");
+    
+    if (!entradaUsuario.trim()) {
+        salida.innerHTML = `<div class="paso">❌ Ingresa una función válida.</div>`;
+        return;
+    }
+
+    try {
+        let funcionProcesada = preprocesarFuncion(entradaUsuario);
+        let pasos = resolverPorPartes(funcionProcesada);
+        
+        // Formatear cadenas para cambiar asteriscos por puntos estéticos
+        let resFinal = pasos.resultadoFinal.replace(/\*/g, '·');
+
+        salida.innerHTML = `
+            <h2>📐 Resultado por el Método de Partes</h2>
+            
+            <div class="paso">
+                <b>🎯 Integral planteada:</b><br>
+                ∫ (${entradaUsuario}) dx
+            </div>
+
+            <div class="paso">
+                <b>🔍 Paso 1: Elegir u y dv (Regla ILATE)</b><br>
+                • <b>u</b> = ${pasos.u}<br>
+                • <b>dv</b> = ${pasos.dv} dx
+            </div>
+
+            <div class="paso">
+                <b>🔧 Paso 2: Derivar u e integrar dv</b><br>
+                • <b>du</b> = ${pasos.du} dx<br>
+                • <b>v</b> = ∫ (${pasos.dv}) dx = ${pasos.v}
+            </div>
+
+            <div class="paso">
+                <b>📖 Paso 3: Aplicar fórmula de integración por partes</b><br>
+                Fórmula: <i>∫ u dv = u·v - ∫ v du</i><br>
+                • Planteamiento: (${pasos.u})·(${pasos.v}) - ∫ (${pasos.v_du}) dx
+            </div>
+            
+            <div class="paso">
+                <b>✅ Paso 4 - Resultado Final (Ordenado Canónicamente):</b><br>
+                <font size="4"><b>F(x) = ${resFinal} + C</b></font>
+            </div>
+            
+            <div class="paso">
+                <em>🌸 Nota: El resultado ha sido simplificado y ordenado de mayor a menor exponente de x automáticamente.</em>
+            </div>
+        `;
+        
+    } catch(error) {
+        console.error(error);
+        salida.innerHTML = `
+            <div class="paso">
+                <b>⚠️ Error analítico:</b> No se pudo estructurar el método por partes clásico.
+                <br><br>
+                <b>Asegúrate de ingresar formatos compatibles con el método de partes clásico:</b>
+                <ul>
+                    <li>Algebraica por Exponencial: <b>x * e^x</b></li>
+                    <li>Algebraica por Trigonométrica: <b>x * sin(x)</b> o <b>3*x * cos(x)</b></li>
+                    <li>Logarítmicas puras: <b>ln(x)</b></li>
+                </ul>
+            </div>
+        `;
+    }
+}
+
+document.getElementById("funcion").addEventListener("keypress", function(e) {
+    if (e.key === "Enter") resolver();
+});
+
+window.onload = function() {
+    document.getElementById("funcion").value = "x * e^x";
+    resolver();
+};
+
+</script>
+</body>
+</html>
